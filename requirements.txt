@@ -1,0 +1,3 @@
+requests
+argparse
+yt-dlp >= 2023
