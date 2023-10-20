@@ -1,10 +1,18 @@
 import os
 import argparse
+import logging
 import requests
 import xml.etree.ElementTree as ET
-from datetime import datetime
-from yt_dlp import YoutubeDL
 
+
+from datetime import datetime
+from requests import HTTPError
+from yt_dlp import YoutubeDL, DownloadError
+
+from youtube_page_parser import get_channel_id
+
+# create logging formatter
+logFormatter = logging.Formatter(fmt=' [%(name)s] %(message)s')
 
 
 def parse_arguments():
@@ -20,12 +28,12 @@ def parse_arguments():
     return args
 
 def get_video_urls(url, last_date=None):
-    print("Requesting from:", url)
+    logging.info("Requesting from:", url)
     try:
         xml_str = requests.get(url).text
         root = ET.fromstring(xml_str)
     except Exception as e:
-        print(f"Error parsing xml from url, {e})")
+        logging.error(f"Error parsing xml from url, {e})")
         exit(1)
 
     # For some reason they all have this namespace thing so this is the cleanest way to get around it I think
@@ -33,7 +41,7 @@ def get_video_urls(url, last_date=None):
 
     channel_name = root.find('ns:title', namespaces=ns).text
     
-    print("Parsing channel:", channel_name)
+    logging.info("Parsing channel:", channel_name)
 
     most_recent_date = None
     videos = []
@@ -45,26 +53,32 @@ def get_video_urls(url, last_date=None):
             most_recent_date = published_date
 
         if last_date is None or last_date < published_date:
-            print("\tAdding video:", video_title)
+            logging.info("\tAdding video:", video_title)
             videos.append(video_uri)
         else:
-            print("\tSkipping video:", video_title)
+            logging.info("\tSkipping video:", video_title)
 
     if last_date is not None and (most_recent_date is None or last_date > most_recent_date):
         most_recent_date = last_date
 
     return ( videos, channel_name, most_recent_date)
 
+def youtubeDlHook(d):
+    # if d['status'] == 'downloading':
+    #     print('Downloading video!')
+    if d['status'] == 'finished':
+        logging.info('\nDownloaded!')
+
 if __name__ == '__main__':
     args = parse_arguments()
     # 1. Read from input file and collect the videos to be downloaded
     # As well as latest timestamps
     if not os.path.exists(args.input):
-        print("Necessary file", args.input, "doesn't exist!")
+        logging.info("Necessary file", args.input, "doesn't exist!")
         exit(1)
 
     if args.jobs < 1:
-        print("Invalid value for --jobs!")
+        logging.info("Invalid value for --jobs!")
         exit(1)
 
     base_output_dir = args.output_dir
@@ -78,13 +92,17 @@ if __name__ == '__main__':
             split_line = line.split(',')
             last_date = None
             if len(split_line) == 1:
-                url = split_line[0]
+                channel_name = split_line[0]
             elif len(split_line) == 2:
-                url = split_line[0]
+                channel_name = split_line[0]
                 last_date = datetime.fromisoformat(split_line[1])
             else:
-                print("Channel file is ill formatted at line:", line_num)
+                logging.error("Channel file is ill formatted at line:", line_num)
                 exit(1)
+
+            id = get_channel_id(channel_name)
+
+            url = f"https://www.youtube.com/feeds/videos.xml?channel_id={id}"
 
             # Get all the video urls after the last date.
             new_video_urls, channel_name, latest_date = get_video_urls(url, last_date)
@@ -107,23 +125,32 @@ if __name__ == '__main__':
                 file_path = os.path.join(dir_path, filename)
                 # Avoid deleting subdirs
                 if os.path.isfile(file_path):
-                    print("Deleting old file:", file_path)
+                    logging.info("Deleting old file:", file_path)
                     os.remove(file_path)
+
+    youtubeDl_opts = {
+        "continue": True,
+        "progress_hooks": [youtubeDlHook],
+        "check_formats": "selected"
+    }
 
     # 4. Download all of the files.
     for channel_name in videos:
         starting_dir = os.getcwd()
         output_dir = get_output_dir(channel_name)
         os.chdir(output_dir)
-        # ydl_ops = {
-        #     'format': 'best',
-        #     'outtmpl': '%(title)s.%(ext)s'
-        # }
-        with YoutubeDL() as ydl:
-            ydl.download(videos[channel_name])
+        try:
+            with YoutubeDL(youtubeDl_opts) as ydl:
+                ydl.download(videos[channel_name])
+        except HTTPError as e:
+            logging.error(f"got http error {e}")
+        except DownloadError as e:
+            logging.error(f"got download error: {e}")
+
         os.chdir(starting_dir)
 
     # 5. Update the input file
+    logging.info(f"new channel urls {new_channel_urls}")
     with open(args.input, "w") as input_channels:
         input_channels.writelines(map(lambda url, date: url + "," + date.isoformat(), new_channel_urls))
 

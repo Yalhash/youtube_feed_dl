@@ -1,3 +1,4 @@
 requests
 argparse
 yt-dlp >= 2023
+beautifulsoup4
