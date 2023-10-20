@@ -9,6 +9,8 @@ from datetime import datetime
 from requests import HTTPError
 from yt_dlp import YoutubeDL, DownloadError
 
+from youtube_page_parser import get_channel_id
+
 # create logging formatter
 logFormatter = logging.Formatter(fmt=' [%(name)s] %(message)s')
 
@@ -90,13 +92,17 @@ if __name__ == '__main__':
             split_line = line.split(',')
             last_date = None
             if len(split_line) == 1:
-                url = split_line[0]
+                channel_name = split_line[0]
             elif len(split_line) == 2:
-                url = split_line[0]
+                channel_name = split_line[0]
                 last_date = datetime.fromisoformat(split_line[1])
             else:
                 logging.error("Channel file is ill formatted at line:", line_num)
                 exit(1)
+
+            id = get_channel_id(channel_name)
+
+            url = f"https://www.youtube.com/feeds/videos.xml?channel_id={id}"
 
             # Get all the video urls after the last date.
             new_video_urls, channel_name, latest_date = get_video_urls(url, last_date)
