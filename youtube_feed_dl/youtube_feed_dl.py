@@ -9,7 +9,7 @@ from datetime import datetime
 from requests import HTTPError
 from yt_dlp import YoutubeDL, DownloadError
 
-from youtube_page_parser import get_channel_id
+from youtube_feed_dl.youtube_page_parser import get_channel_id
 
 # create logging formatter
 logFormatter = logging.Formatter(fmt=' [%(name)s] %(message)s')
@@ -68,12 +68,10 @@ def get_video_urls(url, last_date=None):
     return ( videos, channel_name, most_recent_date)
 
 def youtubeDlHook(d):
-    # if d['status'] == 'downloading':
-    #     print('Downloading video!')
     if d['status'] == 'finished':
         logging.info('\nDownloaded!')
 
-if __name__ == '__main__':
+def main():
     args = parse_arguments()
     # 1. Read from input file and collect the videos to be downloaded
     # As well as latest timestamps
@@ -89,7 +87,10 @@ if __name__ == '__main__':
         logging.info("Invalid value for --jobs!")
         exit(1)
 
-    base_output_dir = args.output_dir
+    base_output_dir = os.path.expanduser(args.output_dir)
+
+    if not os.path.exists(base_output_dir):
+        os.makedirs(base_output_dir)
 
 
     new_channel_urls = []
@@ -118,7 +119,7 @@ if __name__ == '__main__':
 
             new_channel_urls.append((url, latest_date))
 
-    get_output_dir = lambda c_name: args.output_dir if args.flatten else os.path.join(args.output_dir, c_name)
+    get_output_dir = lambda c_name: base_output_dir if args.flatten else os.path.join(base_output_dir, c_name)
 
     # 2. make any directories if necessary (could do while downloading but whatever)
     for channel_name in videos:
@@ -149,8 +150,15 @@ if __name__ == '__main__':
         os.chdir(output_dir)
         try:
             downloaded_urls = set()
+            already_downloaded_ids = set()
+            for file in os.listdir():
+                file_split = file.split(" ")[-1].split(".")[0][1:-1]
+                already_downloaded_ids.add(file_split)
+
+
             for video in videos[channel_name]:
-                if not os.path.isfile(f"{video[1]} [{video[0].split('=')[1]}].mp4"):
+                if f"{video[0].split('=')[1]}" not in already_downloaded_ids:
+
                     with YoutubeDL(youtubeDl_opts) as ydl:
                         ydl.download(video[0])
                         downloaded_urls.add(video[0])
@@ -183,6 +191,5 @@ if __name__ == '__main__':
 
 
     
-
-
-
+if __name__ == "__main__":
+    main()
