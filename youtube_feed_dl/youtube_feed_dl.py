@@ -9,7 +9,7 @@ from datetime import datetime
 from requests import HTTPError
 from yt_dlp import YoutubeDL, DownloadError
 
-from youtube_page_parser import get_channel_id
+from youtube_feed_dl.youtube_page_parser import get_channel_id
 
 # create logging formatter
 logFormatter = logging.Formatter(fmt=' [%(name)s] %(message)s')
@@ -45,6 +45,7 @@ def get_video_urls(url, last_date=None):
 
     most_recent_date = None
     videos = []
+    num_videos = 0
     for entry in root.findall('ns:entry', namespaces=ns):
         video_title = entry.find('ns:title', namespaces=ns).text
         video_uri = entry.find('ns:link[@rel="alternate"]', namespaces=ns).attrib['href']
@@ -54,7 +55,10 @@ def get_video_urls(url, last_date=None):
 
         if last_date is None or last_date < published_date:
             logging.info("\tAdding video:", video_title)
-            videos.append(video_uri)
+            videos.append((video_uri, video_title))
+            num_videos += 1
+            if num_videos == 5:
+                break
         else:
             logging.info("\tSkipping video:", video_title)
 
@@ -64,29 +68,34 @@ def get_video_urls(url, last_date=None):
     return ( videos, channel_name, most_recent_date)
 
 def youtubeDlHook(d):
-    # if d['status'] == 'downloading':
-    #     print('Downloading video!')
     if d['status'] == 'finished':
         logging.info('\nDownloaded!')
 
-if __name__ == '__main__':
+def main():
     args = parse_arguments()
     # 1. Read from input file and collect the videos to be downloaded
     # As well as latest timestamps
-    if not os.path.exists(args.input):
-        logging.info("Necessary file", args.input, "doesn't exist!")
-        exit(1)
+    input = args.input
+    if not os.path.exists(input):
+        if not os.path.exists(os.path.expanduser("~/.channels.txt")):
+            with open(os.path.expanduser("~/.channels.txt"), "w"): pass
+        logging.info("Using defaults ~/.channels.txt file")
+        input = "~/.channels.txt"
+
 
     if args.jobs < 1:
         logging.info("Invalid value for --jobs!")
         exit(1)
 
-    base_output_dir = args.output_dir
+    base_output_dir = os.path.expanduser(args.output_dir)
+
+    if not os.path.exists(base_output_dir):
+        os.makedirs(base_output_dir)
 
 
     new_channel_urls = []
     videos = {}
-    with open(args.input, "r") as input_channels:
+    with open(os.path.expanduser(input), "r") as input_channels:
         
         for line_num, line in enumerate(input_channels.readlines()):
             split_line = line.split(',')
@@ -110,7 +119,7 @@ if __name__ == '__main__':
 
             new_channel_urls.append((url, latest_date))
 
-    get_output_dir = lambda c_name: args.output_dir if args.flatten else os.path.join(args.output_dir, c_name)
+    get_output_dir = lambda c_name: base_output_dir if args.flatten else os.path.join(base_output_dir, c_name)
 
     # 2. make any directories if necessary (could do while downloading but whatever)
     for channel_name in videos:
@@ -140,22 +149,47 @@ if __name__ == '__main__':
         output_dir = get_output_dir(channel_name)
         os.chdir(output_dir)
         try:
-            with YoutubeDL(youtubeDl_opts) as ydl:
-                ydl.download(videos[channel_name])
+            downloaded_urls = set()
+            already_downloaded_ids = set()
+            for file in os.listdir():
+                file_split = file.split(" ")[-1].split(".")[0][1:-1]
+                already_downloaded_ids.add(file_split)
+
+
+            for video in videos[channel_name]:
+                if f"{video[0].split('=')[1]}" not in already_downloaded_ids:
+
+                    with YoutubeDL(youtubeDl_opts) as ydl:
+                        ydl.download(video[0])
+                        downloaded_urls.add(video[0])
+                else:
+                    logging.warning(f"skipping {video[1]} because it's already downloaded.")
+                    downloaded_urls.add(video[0])
         except HTTPError as e:
             logging.error(f"got http error {e}")
         except DownloadError as e:
             logging.error(f"got download error: {e}")
 
+
+        # 5. delete older videos
+        # XXX: Should we delete after a certain amount of time or just blanket
+        # delete videos to keep the count at 5 max?
+        for filename in os.listdir(os.getcwd()):
+            if filename not in downloaded_urls:
+                file_path = os.path.join(output_dir, filename)
+                # Avoid deleting subdirs
+                if os.path.isfile(file_path):
+                    logging.info("Deleting old file:", file_path)
+                    os.remove(file_path)
+
+
         os.chdir(starting_dir)
 
     # 5. Update the input file
-    logging.info(f"new channel urls {new_channel_urls}")
-    with open(args.input, "w") as input_channels:
-        input_channels.writelines(map(lambda url, date: url + "," + date.isoformat(), new_channel_urls))
+    with open(os.path.abspath(os.path.expanduser("~/.youtube_dl_cache")), "w") as input_channels:
+        input_channels.writelines(map(lambda x: x[0] + "," + x[1].isoformat(), new_channel_urls))
 
 
     
-
-
-
+if __name__ == "__main__":
+    main()
